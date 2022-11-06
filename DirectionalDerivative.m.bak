@@ -1,0 +1,13 @@
+function [val] = DirectionalDerivative(vec,n)
+
+    % Compute the maximum of the directional derivative vec'x
+    % subject to ones'*x = 0 and norm(x) = 1.
+
+    options = optimoptions("fmincon","Display","none");
+    fun = @(x) vec'*x;
+    x0 = zeros(n,1);
+
+    [opt,val] = fmincon(fun,x0,[],[],ones(1,n),0,[],[],@nonlcon,options);
+
+end
+

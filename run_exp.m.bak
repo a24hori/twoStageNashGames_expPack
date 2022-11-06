@@ -1,0 +1,299 @@
+%% run_exp.m
+% =========================================================================
+% Compare the results of the two methods:
+%  - TSDRNEP: proposed model (with ambiguity of probability)
+%  - TSSNEP: stochastic model (without ambiguity of probability)
+% =========================================================================
+
+%% Code
+clear
+clc
+% -------------------------------------------------------------------------
+% Settings
+eps = 0;
+N = 2; % Number of players
+K = 70; % Number of samples
+xiDim = 3;
+xiLower = -1;
+xiUpper = 3;
+TEST_num = 10; % Number of instances
+r = 1; % Regularization parameter for SVI
+s = r; % Regularization parameter for worst-case probability
+betagen.alpha = 1;
+betagen.beta = 1;
+% -------------------------------------------------------------------------
+
+% Initialization
+x.DRNE = cell(TEST_num,1); % 1st stage variable (distirbutionally robust Nash eq., DRNE)
+x.exPost = cell(TEST_num,1); % 1st stage variable (Ex-post NE)
+x.SAA = cell(TEST_num,1); % 1st stage variable (SNE)
+y.DRNE = cell(TEST_num,1); % 2nd stage variable (DRNE)
+y.exPost = cell(TEST_num,1); % 2nd stage variable (ex post NE)
+y.SAA = cell(TEST_num,1); % 2nd stage variable (SNE)
+lmd.DRNE = cell(TEST_num,1); 
+lmd.exPost = cell(TEST_num,1);
+lmd.SAA = cell(TEST_num,1);
+m_PWorst = cell(TEST_num,1); % worst probability distribution in DRNE
+P0Nominal = 1/K.*ones(K,1);
+
+first_stage_prof.DRNE = zeros(N,TEST_num);
+first_stage_prof.exPost = zeros(N,TEST_num);
+first_stage_prof.SAA = zeros(N,TEST_num);
+
+recourse_function.inSample.DRNE = cell(TEST_num,1);
+recourse_function.inSample.SAA = cell(TEST_num,1);
+recourse_function.inSample.exPost = cell(TEST_num,1);
+recourse_function.outSample.DRNE = cell(TEST_num,1);
+recourse_function.outSample.SAA = cell(TEST_num,1);
+recourse_function.outSample.exPost = cell (TEST_num,1);
+
+second_stage_prof.inSample.DRNE = zeros(N,TEST_num);
+second_stage_prof.inSample.exPost = zeros(N,TEST_num);
+second_stage_prof.inSample.SAA = zeros(N,TEST_num);
+second_stage_prof.outSample.DRNE = zeros(N,TEST_num);
+second_stage_prof.outSample.exPost = zeros(N,TEST_num);
+second_stage_prof.outSample.SAA = zeros(N,TEST_num);
+second_stage_prof.worst.DRNE = zeros(N,TEST_num);
+second_stage_prof.worst.exPost = zeros(N,TEST_num);
+second_stage_prof.worst.SAA = zeros(N,TEST_num);
+
+expected_profit.inSample.DRNE = zeros(N,TEST_num);
+expected_profit.inSample.exPost = zeros(N,TEST_num);
+expected_profit.inSample.SAA = zeros(N,TEST_num);
+expected_profit.outSample.DRNE = zeros(N,TEST_num);
+expected_profit.outSample.exPost = zeros(N,TEST_num);
+expected_profit.outSample.SAA = zeros(N,TEST_num);
+expected_profit.worst.DRNE = zeros(N,TEST_num);
+expected_profit.worst.exPost = zeros(N,TEST_num);
+expected_profit.worst.SAA = zeros(N,TEST_num);
+
+now_time = datetime(now,'ConvertFrom','datenum');
+fname = "./out/" + string(now_time.Year) + string(now_time.Month) + string(now_time.Day) +...
+    "_" + string(now_time.Hour) + string(now_time.Minute) + "_" + "K=" + string(K) +...
+    "_" + "N=" + string(N);
+% -------------------------------------------------------------------------
+
+fprintf("Run at %d/%02d/%02d %02d:%02d\n", now_time.Year, now_time.Month, now_time.Day,...
+    now_time.Hour, now_time.Minute);
+
+%% Conduct tests
+rng(0,'twister'); % Mersenne-Twister (seed value)
+xi = xiLower + (xiUpper-xiLower).*rand(xiDim,K); % Generate K samples from N-dimensional normal distribution
+TEST = 1;
+
+parfor k=1:1
+    % Start parallel computation
+end
+
+while TEST <= TEST_num
+
+    fprintf("================= TEST num: %d =================\n", TEST);
+    % Generate problem data
+    rho0(1) = 0.1*TEST;
+    rho0(2) = 1-rho0(1);
+    Prob = Problem(N,K,xi,r,s,rho0);
+    % Check if the variational inequality has a trivial solution.
+%     for l=1:K
+%         if all(Prob.veca<Prob.vecp(xi,l))
+%         else
+%             error("The numerical case has only a trivial solution.");
+%         end
+%     end
+
+    % Solve TSSVI by SAA (Jiang et al., 2021)
+    tic
+    [xSAA, ySAA, lmdSAA] = PHA_SAA(Prob);
+    time_ori = toc;
+
+    % Compute TSDRNE by alternating PHA (A-PHA)
+    tic
+    [xDRNE, yDRNE, lmdDRNE, p_worst, state] = PHA_Alter(Prob);
+    time_new = toc;
+
+    if state == 1
+        % Memo
+        x.DRNE{TEST} = xDRNE;
+        y.DRNE{TEST} = yDRNE;
+        lmd.DRNE{TEST} = lmdDRNE;
+        m_PWorst{TEST} = p_worst;
+    
+        x.SAA{TEST} = xSAA;
+        y.SAA{TEST} = ySAA;
+        lmd.SAA{TEST} = lmdSAA;
+    
+        % Display results of the test
+        %fprintf("Comput. Time (Proposed): %d\n", time_new);
+        %fprintf("=================================================\n");
+        
+        % ----------------------------------------------------------------
+        % Compare expected profit function
+        % ----------------------------------------------------------------
+        
+        recourse_function.inSample.DRNE{TEST} = zeros(N,K);
+        recourse_function.inSample.SAA{TEST} = zeros(N,K);
+        recourse_function.outSample.DRNE{TEST} = zeros(N,K);
+        recourse_function.outSample.SAA{TEST} = zeros(N,K);
+        
+        % Generate 'out-sample' data (beta distribution)
+        xiInSample = xi;
+        xiOutSample = xiLower + (xiUpper-xiLower).*betarnd(betagen.alpha,betagen.beta,xiDim,K);
+    
+        % Compute the expected profit of each player under the reference and worst probability
+        for j=1:N
+    
+            % First stage profit
+            first_stage_prof.DRNE(j,TEST) = Prob.theta(j,xDRNE);
+            first_stage_prof.SAA(j,TEST) = Prob.theta(j,xSAA);
+    
+            % Compute recourse value for each scenario
+            for k=1:K
+                recourse_function.inSample.DRNE{TEST}(j,k) = Prob.gamma(j,yDRNE,xiInSample,k);
+                recourse_function.inSample.SAA{TEST}(j,k) = Prob.gamma(j,ySAA,xiInSample,k);
+                recourse_function.outSample.DRNE{TEST}(j,k) = Prob.gamma(j,yDRNE,xiOutSample,k);
+                recourse_function.outSample.SAA{TEST}(j,k) = Prob.gamma(j,ySAA,xiOutSample,k);
+            end
+            
+            % Expected recourse under the worst-probability
+            second_stage_prof.worst.DRNE(j,TEST) = recourse_function.inSample.DRNE{TEST}(j,:)*p_worst(:,j);
+            second_stage_prof.worst.SAA(j,TEST) = recourse_function.inSample.SAA{TEST}(j,:)*p_worst(:,j);
+            % First stage expected profit under the worst probability
+            expected_profit.worst.DRNE(j,TEST) = first_stage_prof.DRNE(j,TEST) + second_stage_prof.worst.DRNE(j,TEST);
+            expected_profit.worst.SAA(j,TEST) = first_stage_prof.SAA(j,TEST) + second_stage_prof.worst.SAA(j,TEST);
+    
+    
+            % Compute sample average under out-sample verification data
+            second_stage_prof.inSample.DRNE(j,TEST) = 1/K*sum(recourse_function.inSample.DRNE{TEST}(j,:));
+            second_stage_prof.inSample.SAA(j,TEST) = 1/K*sum(recourse_function.inSample.SAA{TEST}(j,:));
+            second_stage_prof.outSample.DRNE(j,TEST) = 1/K*sum(recourse_function.outSample.DRNE{TEST}(j,:));
+            second_stage_prof.outSample.SAA(j,TEST) = 1/K*sum(recourse_function.outSample.SAA{TEST}(j,:));
+            % First stage expected profit with sample average
+            expected_profit.inSample.SAA(j,TEST) = first_stage_prof.SAA(j,TEST) + second_stage_prof.inSample.SAA(j,TEST);
+            expected_profit.inSample.DRNE(j,TEST) = first_stage_prof.DRNE(j,TEST) + second_stage_prof.inSample.DRNE(j,TEST);
+            expected_profit.outSample.SAA(j,TEST) = first_stage_prof.SAA(j,TEST) + second_stage_prof.outSample.SAA(j,TEST);
+            expected_profit.outSample.DRNE(j,TEST) = first_stage_prof.DRNE(j,TEST) + second_stage_prof.outSample.DRNE(j,TEST);
+    
+        end
+
+    else
+        
+        TEST = TEST - 1;
+    
+    end
+
+    TEST = TEST + 1;
+
+end
+
+% Save numerical data
+save(fname + ".mat");
+
+%% ===================================================
+% Profit function comparison
+% ----------------------------------------------------
+fprintf("===== Cost (-1*prifit) under in-sample average =====\n");
+for TEST = 1:TEST_num
+    fprintf("Test case %d. SAA: %4f, DRNE: %4f\n", TEST, ...
+        sum(expected_profit.inSample.SAA(:,TEST)),...
+        sum(expected_profit.inSample.DRNE(:,TEST)));
+end
+
+fprintf("===== Cost (-1*profit) under worst-case mean =====\n");
+for TEST = 1:TEST_num
+    fprintf("Test case %d. SAA: %4f, DRNE: %4f\n", TEST, ...
+        sum(expected_profit.worst.SAA(:,TEST)),...
+        sum(expected_profit.worst.DRNE(:,TEST)));
+end
+
+fprintf("===== Directional derivative (perturbation analysis) =====\n");
+% Compute the maximum directional derivative Q^TdP at p subject to
+%   sum(dP) = 0 
+% where dP is the direction. This is because the perturbation requires that 
+% p+dP in the polyhedron Δ:={p:sum(p)=1, p\geq 0}.
+% Note that the problem above is formulated as
+%   max         <Q,dP>
+%   subject to  sum_{k=1}^K [dP]_k = 0,
+%               \|dP\| = 1 (to ensure the boundedness of the problem).
+for TEST = 1:TEST_num
+    fprintf("--- Test case: %d --- \n", TEST);
+    for j = 1:N
+        fprintf("- Player %d:\n", j);
+        fprintf(" - Max. DD:\n  - SAA: %4f, DRNE: %4f\n",...
+            DirectionalDerivative(recourse_function.inSample.SAA{TEST}(j,:)',K,"max"),...
+            DirectionalDerivative(recourse_function.inSample.DRNE{TEST}(j,:)',K,"max"));
+        fprintf(" - Min. DD:\n  - SAA: %4f, DRNE: %4f\n",...
+            DirectionalDerivative(recourse_function.inSample.SAA{TEST}(j,:)',K,"min"),...
+            DirectionalDerivative(recourse_function.inSample.DRNE{TEST}(j,:)',K,"min"));
+    end
+end
+
+% for TEST = 1:TEST_num
+%     figure
+%     scatter(y.SAA{TEST}(1,:),y.SAA{TEST}(2,:),'o')
+%     hold on
+%     scatter(y.DRNE{TEST}(1,:),y.DRNE{TEST}(2,:),'x')
+%     hold off
+% end
+
+%% ===================================================
+% Plotting profit curve
+% ----------------------------------------------------
+% stackData = zeros(TEST_num,2,N);
+% %stackData_outSample = stackData;
+% %stackData_worst = stackData_outSample;
+% legendData_SNE = cell(1,N);
+% legendData_DRNE = cell(1,N);
+% 
+% for l=1:TEST_num
+%    for j=1:N
+%        stackData(l,1,j) = abs(expected_profit.inSample.SAA(j,l) - expected_profit.outSample.SAA(j,l));
+%        stackData(l,2,j) = abs(expected_profit.inSample.DRNE(j,l) - expected_profit.outSample.DRNE(j,l));
+%        % Make legend data
+%        legendData_SNE{j} = "Player " + string(j) + " (SNE)";
+%        legendData_DRNE{j} = "Player " + string(j) + " (DRNE)";
+%    end
+% end
+% legendData = [legendData_SNE, legendData_DRNE];
+% groupLabels = num2cell(1:TEST_num);
+% 
+% % Plot profit under the worst-case probability
+% plotBarStackGroups(stackData,groupLabels);
+% grid on
+% legend(legendData);
+% xlabel('Instance No.')
+% ylabel('Difference')
+% title("Diff. of Profit between in- and out-sample (K="+num2str(K)+")")
+% exportgraphics(gcf,fname + ".eps")
+% savefig(fname + ".fig")
+% 
+% for l=1:TEST_num
+%    for j=1:N
+%        stackData_outSample(l,1,j) = expected_profit.outSample.SAA(j,l);
+%        stackData_outSample(l,2,j) = expected_profit.outSample.DRNE(j,l);
+%        % Make legend data
+%        legendData_SNE{j} = "Player " + string(j) + " (SNE)";
+%        legendData_DRNE{j} = "Player " + string(j) + " (DRNE)";
+%    end
+% end
+% legendData = [legendData_SNE, legendData_DRNE];
+% groupLabels = num2cell(1:TEST_num);
+% 
+% 
+% % Compute Kullback--Leibler divergence between in-sample distribution, or a
+% % reference probability distribution, and out-sample distribution.
+% % Q: uniform distribution => p_k=1/K k=1,...,K
+% % P: beta distribution => 
+% %KLval = KLdiv(P,Q,K);
+% % Plot profit under reference probability
+% plotBarStackGroups(stackData_outSample,groupLabels);
+% grid on
+% legend(legendData);
+% xlabel('Instance No.')
+% ylabel('Profit')
+% title("Profit (K=" + num2str(K) + ")")
+% exportgraphics(gcf,fname + "_outSample.eps")
+% savefig(fname+"_outSample.fig");
+
+fin_time = datetime(now,'ConvertFrom','datenum');
+fprintf("Finished at %d/%02d/%02d %02d:%02d\n", fin_time.Year, fin_time.Month, fin_time.Day,...
+    fin_time.Hour, fin_time.Minute);
+% ========================================================
