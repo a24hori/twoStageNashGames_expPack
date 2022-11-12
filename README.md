@@ -1,6 +1,6 @@
 # Two-stage Distributionally Robust Nash Games
 
-This repository is to provide a program used in a numerical experiment of the following paper.
+This repository provides a program used in a numerical experiment of the following paper.
 If you have a question and request, please post them as an \`issue' or \`pull request'
 
 ---
